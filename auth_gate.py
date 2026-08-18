@@ -49,7 +49,6 @@ from starlette.routing import Route
 GATEWAY_SECRET = os.environ.get("GATEWAY_SECRET")
 UPSTREAM_HOST = os.environ.get("UPSTREAM_HOST", "127.0.0.1")
 UPSTREAM_PORT = os.environ.get("UPSTREAM_PORT", "8000")
-GATEWAY_HEADER_NAME = os.environ.get("GATEWAY_HEADER_NAME", "x-gateway-secret").lower()
 UPSTREAM_BASE = f"http://{UPSTREAM_HOST}:{UPSTREAM_PORT}"
 
 if not GATEWAY_SECRET:
@@ -63,42 +62,31 @@ _client = httpx.AsyncClient(base_url=UPSTREAM_BASE, timeout=None)
 
 
 async def proxy(request: Request):
-    supplied = request.headers.get(GATEWAY_HEADER_NAME)
+    # Claude's custom connector UI on this account has no "request headers"
+    # option and no working OAuth server on our side, so the secret and the
+    # Canvas token are passed as query parameters baked directly into the
+    # connector's Server URL instead: ?gw_key=...&canvas_token=...
+    query = dict(request.query_params)
+    supplied_secret = query.pop("gw_key", None)
+    canvas_token = query.pop("canvas_token", None)
 
-    # --- TEMPORARY DEBUG LOGGING ---
-    # Prints to Render's log so we can compare what arrived vs. what's
-    # expected, WITHOUT ever printing the full secret. Safe to remove
-    # once things are working.
-    incoming_header_names = sorted(request.headers.keys())
     print(f"[auth_gate debug] path={request.url.path} method={request.method}")
-    print(f"[auth_gate debug] incoming header names: {incoming_header_names}")
-    print(f"[auth_gate debug] looking for header named: {GATEWAY_HEADER_NAME!r}")
-    if supplied is None:
-        print("[auth_gate debug] that header was NOT present on this request at all")
-    else:
-        print(
-            f"[auth_gate debug] supplied value length={len(supplied)} "
-            f"starts_with={supplied[:4]!r} ends_with={supplied[-4:]!r}"
-        )
-        print(
-            f"[auth_gate debug] expected value length={len(GATEWAY_SECRET)} "
-            f"starts_with={GATEWAY_SECRET[:4]!r} ends_with={GATEWAY_SECRET[-4:]!r}"
-        )
-        print(f"[auth_gate debug] values match: {supplied == GATEWAY_SECRET}")
-    # --- END TEMPORARY DEBUG LOGGING ---
+    print(f"[auth_gate debug] gw_key present: {supplied_secret is not None}")
+    print(f"[auth_gate debug] canvas_token present: {canvas_token is not None}")
 
-    if supplied != GATEWAY_SECRET:
+    if supplied_secret != GATEWAY_SECRET:
         return PlainTextResponse("Unauthorized", status_code=401)
 
-    # Forward every header except the gateway secret itself and hop-by-hop
-    # headers that shouldn't be forwarded as-is. Your Canvas token header
-    # (whatever canvas-mcp expects it to be named) passes through here
-    # untouched, straight to the real server.
+    # Forward every header as-is except hop-by-hop ones. We inject the
+    # Canvas token as a header ourselves below, since canvas-mcp expects it
+    # as a header even though it arrived here as a query param.
     forward_headers = {
         k: v
         for k, v in request.headers.items()
-        if k.lower() not in {GATEWAY_HEADER_NAME, "host", "content-length"}
+        if k.lower() not in {"host", "content-length"}
     }
+    if canvas_token:
+        forward_headers["X-Canvas-Token"] = canvas_token
 
     body = await request.body()
 
@@ -107,7 +95,7 @@ async def proxy(request: Request):
         url=request.url.path,
         headers=forward_headers,
         content=body,
-        params=request.query_params,
+        params=query,  # remaining query params only - gw_key/canvas_token stripped
     )
 
     upstream_response = await _client.send(upstream_request, stream=True)
