@@ -124,9 +124,43 @@ async def health(request: Request):
     return PlainTextResponse("ok")
 
 
+async def no_oauth(request: Request):
+    # Claude's connector client always probes these paths first to check
+    # whether the server supports OAuth login. We don't implement OAuth -
+    # auth happens via gw_key/canvas_token in the URL instead - so we must
+    # return a clean 404 here, not 401. A 401 makes Claude's client think
+    # OAuth exists but failed, which surfaces a confusing "couldn't
+    # register with sign-in service" error even when the real /mcp call
+    # underneath succeeds fine.
+    return PlainTextResponse("Not Found", status_code=404)
+
+
 app = Starlette(
     routes=[
         Route("/healthz", health, methods=["GET"]),
+        Route(
+            "/.well-known/oauth-protected-resource",
+            no_oauth,
+            methods=["GET"],
+        ),
+        Route(
+            "/.well-known/oauth-protected-resource/{path:path}",
+            no_oauth,
+            methods=["GET"],
+        ),
+        Route(
+            "/.well-known/oauth-authorization-server",
+            no_oauth,
+            methods=["GET"],
+        ),
+        Route(
+            "/.well-known/oauth-authorization-server/{path:path}",
+            no_oauth,
+            methods=["GET"],
+        ),
+        Route("/register", no_oauth, methods=["GET", "POST"]),
+        Route("/authorize", no_oauth, methods=["GET", "POST"]),
+        Route("/token", no_oauth, methods=["GET", "POST"]),
         Route("/{path:path}", proxy, methods=["GET", "POST", "DELETE", "OPTIONS"]),
     ]
 )
