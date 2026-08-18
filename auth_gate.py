@@ -65,6 +65,28 @@ _client = httpx.AsyncClient(base_url=UPSTREAM_BASE, timeout=None)
 async def proxy(request: Request):
     supplied = request.headers.get(GATEWAY_HEADER_NAME)
 
+    # --- TEMPORARY DEBUG LOGGING ---
+    # Prints to Render's log so we can compare what arrived vs. what's
+    # expected, WITHOUT ever printing the full secret. Safe to remove
+    # once things are working.
+    incoming_header_names = sorted(request.headers.keys())
+    print(f"[auth_gate debug] path={request.url.path} method={request.method}")
+    print(f"[auth_gate debug] incoming header names: {incoming_header_names}")
+    print(f"[auth_gate debug] looking for header named: {GATEWAY_HEADER_NAME!r}")
+    if supplied is None:
+        print("[auth_gate debug] that header was NOT present on this request at all")
+    else:
+        print(
+            f"[auth_gate debug] supplied value length={len(supplied)} "
+            f"starts_with={supplied[:4]!r} ends_with={supplied[-4:]!r}"
+        )
+        print(
+            f"[auth_gate debug] expected value length={len(GATEWAY_SECRET)} "
+            f"starts_with={GATEWAY_SECRET[:4]!r} ends_with={GATEWAY_SECRET[-4:]!r}"
+        )
+        print(f"[auth_gate debug] values match: {supplied == GATEWAY_SECRET}")
+    # --- END TEMPORARY DEBUG LOGGING ---
+
     if supplied != GATEWAY_SECRET:
         return PlainTextResponse("Unauthorized", status_code=401)
 
